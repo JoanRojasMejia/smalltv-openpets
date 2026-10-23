@@ -95,7 +95,7 @@ python3 daily_digest.py generate --date 2026-10-22   # build and print a digest 
 
 ### Production deploys → Jira
 
-When a production pipeline (name contains PROD, not TEST) deploys a commit with bracketed ticket keys (`[ABC-41] ...`), the tickets assigned to you that are not Done yet trigger a blue **IN PROD: MOVE TO DONE?** card, and stay as a summary row (`ABC-41 DONE?`) until Jira shows them done (rechecked every 30 min).
+When a production pipeline (name contains PROD, not TEST) deploys a commit with bracketed ticket keys (`[ABC-41] ...`), the tickets assigned to you that are not Done yet trigger a blue **MOVE TO DONE?** card (`ABC-41 in SHOP-PROD: ...`), and stay as a summary row (`ABC-41 DONE?`) until Jira shows them done (rechecked every 30 min).
 
 ### Deploys (AWS CodePipeline) and AWS SSO
 

@@ -141,7 +141,7 @@ def message_bubble(layer: Image.Image, title: str, body: list[str], frame: int,
         for dx, cell in enumerate(row):
             if cell == "#":
                 d.point((x0 + pad + dx, y0 + pad + dy), fill=accent)
-    px.draw_text(d, (x0 + pad + 11, y0 + pad), title, accent)
+    px.draw_text(d, (x0 + pad + 11, y0 + pad), px.truncate(title, x1 - x0 - 2 * pad - 11), accent)
     y = y0 + pad + px.GLYPH_H + px.LINE_GAP
     for line in body:
         px.draw_text(d, (x0 + pad, y), line, (235, 235, 240))
@@ -387,18 +387,18 @@ def build_page_gif(title: str, entries: list[str], out: Path, accent, icon) -> i
             for dx, cell in enumerate(row):
                 if cell == "#":
                     d.point((x0 + pad + dx, y0 + pad + dy), fill=accent)
-        px.draw_text(d, (x0 + pad + 11, y0 + pad), px.normalize_text(title), accent)
-        y, width = y0 + pad + px.GLYPH_H + 6, x1 - x0 - 2 * pad - 6
+        px.draw_text(d, (x0 + pad + 11, y0 + pad), px.truncate(px.normalize_text(title), x1 - x0 - 2 * pad - 11), accent)
+        y, width = y0 + pad + px.GLYPH_H + 4, x1 - x0 - 2 * pad - 6
         bottom = y1 - pad - px.GLYPH_H
         for entry in entries or ["-"]:
             lines = px.wrap(px.normalize_text(entry), width)
-            if y + (len(lines) - 1) * (px.GLYPH_H + px.LINE_GAP) > bottom:
+            if y + (len(lines) - 1) * (px.GLYPH_H + 2) > bottom:
                 break
             d.rectangle((x0 + pad, y + 2, x0 + pad + 2, y + 4), fill=accent)  # bullet
             for line in lines:
                 px.draw_text(d, (x0 + pad + 6, y), line, (235, 235, 240))
-                y += px.GLYPH_H + px.LINE_GAP
-            y += 3
+                y += px.GLYPH_H + 2
+            y += 2
         canvas = Image.new("RGB", (SIZE, SIZE), (0, 0, 0))
         big = layer.resize((SIZE, SIZE), Image.NEAREST)
         canvas.paste(big, (0, 0), big)

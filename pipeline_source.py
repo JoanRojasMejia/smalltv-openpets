@@ -243,7 +243,8 @@ class PipelineNotifier:
             return
         for item in self.followup.on_deploys(finished)[-2:]:
             self.log(f"jira: {item['key']} reached {item['env']}")
-            self._show("op-jira.gif", "jira", "IN PROD: MOVE TO DONE?", f"{item['key']} {clean_summary(item['summary'])}")
+            self._show("op-jira.gif", "jira", "MOVE TO DONE?",
+                       f"{item['key']} in {item['env']}: {clean_summary(item['summary'])}")
         if now >= self.next_followup_refresh:
             self.followup.refresh()
             self.next_followup_refresh = now + 1800
