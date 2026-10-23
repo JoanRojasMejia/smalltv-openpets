@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 import setup_device
+from status_board import BOARD
 from pet_sync import GIF_DIR, ROOT, look_args, uv_binary
 
 KEYCHAIN_SERVICE = "smalltv-openpets-calendar"
@@ -145,6 +146,8 @@ class CalendarNotifier:
                         self.log(f"calendar: {len(self.reminder.events)} meeting(s) in the next 24 h"
                                  + (f" from {', '.join(names)}" if names else ""))
                     error = None
+                upcoming = [e for e in sorted(self.reminder.events, key=lambda e: e["start"]) if e["start"] > now]
+                BOARD.set("next_meeting", upcoming[0] if upcoming else None)
                 hit = self.reminder.poll(now)
                 if hit:
                     event, minutes = hit

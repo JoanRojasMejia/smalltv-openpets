@@ -23,11 +23,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import config
+from agent_stats import AgentDay
+from status_board import BOARD
 import pet_sync
 import session_store
 import setup_device
 from pet_sync import PetSyncer
 from calendar_source import CalendarNotifier
+from jira_source import SummaryNotifier
 from pipeline_source import PipelineNotifier
 from slack_notifier import SlackNotifier
 from states import REACTION_TO_STATE, device_path
@@ -304,14 +307,16 @@ class WaitingDetail:
 
 
 def run_sessions(host: str, state_dir: Path, dry_run: bool, poll: float, pet_sync: bool, slack: bool,
-                 calendar: bool, pipelines: bool) -> None:
+                 calendar: bool, pipelines: bool, summary_card: bool) -> None:
     display = make_display(host, dry_run)
     watcher = SessionWatcher(state_dir)
     syncer = PetSyncer(host, log=log) if pet_sync and not dry_run else None
     notifiers = [n for n in (SlackNotifier.start(host, log) if slack and not dry_run else None,
                              CalendarNotifier.start(host, log) if calendar and not dry_run else None,
                              PipelineNotifier.start(host, log) if pipelines and not dry_run else None) if n]
+    summary = SummaryNotifier.start(host, log) if summary_card and not dry_run else None
     overlay = MessageOverlay()
+    agent_day = AgentDay()
     detail = WaitingDetail(lambda lines: render_waiting_detail(host, lines)) if not dry_run else None
 
     def waiting_lines(wall: float) -> list[str] | None:
@@ -320,6 +325,8 @@ def run_sessions(host: str, state_dir: Path, dry_run: bool, poll: float, pet_syn
     def show_state(now: float, wall: float) -> None:
         if watcher.state == "waiting" and detail and detail.ready_for(waiting_lines(wall)):
             display.show_path("waiting detail", WAITING_DETAIL_PATH, now)
+        elif (watcher.state or "idle") == "idle" and summary and summary.ready():
+            display.show_path("summary", summary.ready(), now)
         else:
             display.show(watcher.state or "idle", now)
 
@@ -339,6 +346,8 @@ def run_sessions(host: str, state_dir: Path, dry_run: bool, poll: float, pet_syn
         changed = watcher.poll(wall)
         if changed:
             log(f"sessions -> {changed}")
+        agent_day.observe(watcher.sessions, wall)
+        BOARD.set("agents_today", agent_day.snapshot())
         resync = syncer.poll(now, watcher.state) if syncer else False
         if resync and detail:
             detail.invalidate()
@@ -347,7 +356,8 @@ def run_sessions(host: str, state_dir: Path, dry_run: bool, poll: float, pet_syn
         detail_ready = detail_ready or bool(
             detail and display.pending is None and display.current_path != WAITING_DETAIL_PATH
             and detail.ready_for(waiting_lines(wall)))
-        if overlay.just_ended(now) or (not overlay.active(now) and (changed or resync or detail_ready)):
+        summary_fresh = bool(summary and summary.take_fresh() and (watcher.state or "idle") == "idle")
+        if overlay.just_ended(now) or (not overlay.active(now) and (changed or resync or detail_ready or summary_fresh)):
             show_state(now, wall)
         display.flush(now)
         time.sleep(poll)
@@ -394,6 +404,7 @@ def main() -> None:
     parser.add_argument("--no-slack", action="store_true", help="do not show Slack DMs and mentions")
     parser.add_argument("--no-calendar", action="store_true", help="do not show meeting reminders")
     parser.add_argument("--no-pipelines", action="store_true", help="do not show CodePipeline deploys / AWS SSO expiry")
+    parser.add_argument("--no-summary", action="store_true", help="keep the plain idle GIF instead of the Jira summary")
     parser.add_argument("--no-pet-sync", action="store_true",
                         help="do not re-render and upload the GIFs when the OpenPets pet changes")
     parser.add_argument("--poll", type=float, default=0.5, help="seconds between log reads")
@@ -404,7 +415,7 @@ def main() -> None:
         if args.source == "sessions":
             run_sessions(args.host, args.state_dir, args.dry_run, args.poll,
                          pet_sync=not args.no_pet_sync, slack=not args.no_slack, calendar=not args.no_calendar,
-                         pipelines=not args.no_pipelines)
+                         pipelines=not args.no_pipelines, summary_card=not args.no_summary)
         else:
             run(args.host, args.log, args.dry_run, args.poll)
     except KeyboardInterrupt:

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import config
 import setup_device
+from status_board import BOARD
 from pet_sync import GIF_DIR, ROOT, look_args, uv_binary
 from slack_source import POLL_SECONDS, SlackPoller, load_token, make_api
 
@@ -83,6 +84,7 @@ class SlackNotifier:
                     reported = self.poller.last_error
                     self.log(f"slack poll failed ({reported}); backing off" if reported else "slack poll ok")
                 if messages:
+                    BOARD.set("last_message", {"sender": messages[-1].sender, "ts": messages[-1].ts})
                     note = summarize(messages)
                     detail = f" (calcifer: {note.title})" if note.kind == "calcifer" else ""
                     self.log(f"slack: {len(messages)} new message(s){detail}")

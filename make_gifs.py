@@ -277,6 +277,96 @@ def build_calcifer_gif(sheet: Image.Image, verdict: str | None, reason: str, out
     return out.stat().st_size
 
 
+# --- idle summary: story-point progress --------------------------------------------------
+
+def summary_color(percent: int | None):
+    if percent is None:
+        return (150, 150, 150)
+    return (80, 220, 100) if percent < 75 else (240, 210, 60) if percent <= 100 else (255, 70, 70)
+
+
+SUMMARY_PET_H = 40
+ROW_STYLES = {  # summary row kind -> (color, icon)
+    "meeting": (MEETING_ACCENT, MEETING_ICON),
+    "deploy_ok": ((80, 220, 100), px.ICONS["done"]),
+    "deploy_failed": ((255, 70, 70), px.ICONS["error"]),
+    "slack": (MESSAGE_ACCENT, MESSAGE_ICON),
+    "agents": ((190, 120, 255), ["..#.#..", "#######", "#.#.#.#", "#######", "#.....#", "#.###.#", "#######"]),
+}
+
+
+def task_box(d: ImageDraw.ImageDraw, title: str, percent: int | None, line: str, text: str, frame: int) -> int:
+    """Story-point box at the top; returns its bottom y."""
+    color = summary_color(percent)
+    x0, y0, x1 = M, M + 1, LOW - M - 1
+    pad = 4
+    bar_y = y0 + pad + px.GLYPH_H + 3
+    big_y = bar_y + 5 + 3
+    body_y = big_y + 2 * px.GLYPH_H + 3
+    body = [px.truncate(px.normalize_text(text) or "...", x1 - x0 - 2 * pad)]
+    y1 = body_y + px.GLYPH_H + pad
+    halo = dim(color, 0.35 if frame % 2 else 0.25)
+    px.stepped_box(d, (x0 - 1, y0 - 1, x1 + 1, y1 + 1), fill=halo, border=halo)
+    px.stepped_box(d, (x0, y0, x1, y1), fill=(14, 14, 24), border=color)
+    px.draw_text(d, (x0 + pad, y0 + pad), px.normalize_text(title), color)
+    bar_x0, bar_x1 = x0 + pad, x1 - pad
+    d.rectangle((bar_x0, bar_y, bar_x1, bar_y + 4), outline=dim(color, 0.6))
+    if percent:
+        filled = bar_x0 + 1 + round((bar_x1 - bar_x0 - 2) * min(percent, 100) / 100)
+        d.rectangle((bar_x0 + 1, bar_y + 1, max(bar_x0 + 1, filled), bar_y + 3), fill=color)
+    big = "--" if percent is None else f"{percent}%"
+    draw_tall_text(d, (x0 + pad, big_y), big, color)
+    px.draw_text(d, (x0 + pad + px.text_width(big) + 6, big_y + px.GLYPH_H // 2 + 1), px.normalize_text(line),
+                 (235, 235, 240))
+    px.draw_text(d, (x0 + pad, body_y), body[0], (170, 170, 180))
+    return y1
+
+
+def summary_layer(layer: Image.Image, title: str, percent: int | None, line: str, text: str,
+                  rows: list, frame: int) -> None:
+    d = ImageDraw.Draw(layer)
+    y = (task_box(d, title, percent, line, text, frame) + 6) if title else M + 2
+    x0, x1 = M + 1, LOW - M - 1
+    for kind, row_text in rows[:4]:
+        color, icon = ROW_STYLES.get(kind, ((200, 200, 200), px.ICONS["idle"]))
+        for dy, icon_row in enumerate(icon):
+            for dx, cell in enumerate(icon_row):
+                if cell == "#":
+                    d.point((x0 + dx, y + dy), fill=color)
+        # leave the bottom-right corner to the pet
+        width = x1 - (x0 + 10) - (SUMMARY_PET_W_ART + 2 if y + px.GLYPH_H > PET_TOP_ART else 0)
+        px.draw_text(d, (x0 + 10, y), px.truncate(row_text, width), (225, 225, 230))
+        y += px.GLYPH_H + 3
+
+
+SUMMARY_PET_W = round(CELL_W * SUMMARY_PET_H / CELL_H)
+SUMMARY_PET_W_ART = SUMMARY_PET_W // px.PX + 1
+PET_TOP_ART = (SIZE - MARGIN - SUMMARY_PET_H) // px.PX
+
+
+def build_summary_gif(sheet: Image.Image, title: str, percent: int | None, line: str, text: str,
+                      rows: list, out: Path) -> int:
+    """The idle screen: story-point progress and today's facts, with a small resting pet.
+
+    Over budget, the pet switches to its worried ("failed") animation.
+    """
+    over_budget = percent is not None and percent > 100
+    row, frames, loop_ms = (5, 8, 1220) if over_budget else (0, 6, 5500)  # failed / idle
+    images = []
+    for col in range(frames):
+        canvas = Image.new("RGB", (SIZE, SIZE), (0, 0, 0))
+        cell = sheet.crop((col * CELL_W, row * CELL_H, (col + 1) * CELL_W, (row + 1) * CELL_H))
+        pet = cell.resize((SUMMARY_PET_W, SUMMARY_PET_H), Image.LANCZOS)
+        canvas.paste(pet, (SIZE - MARGIN - SUMMARY_PET_W, SIZE - MARGIN - SUMMARY_PET_H), pet)
+        layer = Image.new("RGBA", (LOW, LOW), (0, 0, 0, 0))
+        summary_layer(layer, title, percent, line, text, rows, col)
+        big = layer.resize((SIZE, SIZE), Image.NEAREST)
+        canvas.paste(big, (0, 0), big)
+        images.append(canvas.quantize(colors=64, dither=Image.Dither.NONE))
+    images[0].save(out, save_all=True, append_images=images[1:], duration=loop_ms // frames, loop=0, optimize=True)
+    return out.stat().st_size
+
+
 # --- smooth bubble -----------------------------------------------------------------------
 
 def soft_bubble(canvas: Image.Image, state: str, text: str, accent, frame: int, dots) -> None:
@@ -357,6 +447,11 @@ def main() -> None:
     parser.add_argument("--style", choices=["sticker", "neon", "rpg", "soft"], default="neon")
     parser.add_argument("--out", default="gifs")
     parser.add_argument("--only", default="", help="comma-separated states to render (default: all)")
+    parser.add_argument("--summary-title", default=None,
+                        help="render only the idle summary GIF (op-summary.gif) with this title")
+    parser.add_argument("--summary-percent", default="", help="story-point budget used, empty if unknown")
+    parser.add_argument("--summary-line", default="", help="e.g. '10 H LEFT'")
+    parser.add_argument("--summary-rows", default="[]", help='JSON [[kind, text], ...] (meeting, deploy_ok, ...)')
     parser.add_argument("--card", default=None, choices=["running", "ok", "failed", "sso"],
                         help="render only a generic notification card (op-card.gif) with --card-title and --message-text")
     parser.add_argument("--card-title", default="")
@@ -394,6 +489,12 @@ def main() -> None:
         verdict = None if args.calcifer == "comment" else args.calcifer
         size = build_calcifer_gif(sheet, verdict, args.message_text, out_dir / "op-calcifer.gif")
         print(f"op-calcifer.gif  {size // 1024} KB")
+        return
+    if args.summary_title is not None:
+        percent = int(args.summary_percent) if args.summary_percent.strip() else None
+        size = build_summary_gif(sheet, args.summary_title, percent, args.summary_line, args.message_text,
+                                 json.loads(args.summary_rows), out_dir / "op-summary.gif")
+        print(f"op-summary.gif  {size // 1024} KB")
         return
     if args.card is not None:
         accent, icon = CARDS[args.card]

@@ -106,5 +106,18 @@ class SubjectTest(unittest.TestCase):
         self.assertEqual(commit_subject("", "joan/feature"), "joan/feature")
 
 
+class LastMineTest(unittest.TestCase):
+    def test_last_finished_deploy_of_mine_includes_the_baseline(self):
+        tool = FakeTool()
+        w = PipelineWatcher(tool, [P], ME)
+        old = dict(ex("a"), updated=5.0)
+        tool.executions = [old, dict(ex("o", author="ana@example.com"), updated=9.0)]
+        w.poll()
+        self.assertEqual(w.last_mine["id"], "a")
+        tool.executions = [old, dict(ex("b", status="Failed"), updated=7.0), dict(ex("r", status="InProgress"), updated=8.0)]
+        w.poll()
+        self.assertEqual((w.last_mine["id"], w.last_mine["status"]), ("b", "Failed"))
+
+
 if __name__ == "__main__":
     unittest.main()

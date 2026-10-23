@@ -70,6 +70,16 @@ An optional `calendars.txt` (one calendar name per line) limits reminders to the
 
 Fallback when EventKit is not an option: a Google Calendar secret iCal address in the Keychain (`security add-generic-password -U -s smalltv-openpets-calendar -a "$USER" -w`), read by `tools/calendar_events.py` through `uv` with `icalendar` + `recurring-ical-events`. Many Google Workspace domains disable secret addresses.
 
+### Idle summary: story-point budget
+
+When no agent is busy, the idle screen shows the Jira task you have in progress (`jira_status`, default "En Progreso") instead of "Zzz...": key, story points, a progress bar and how many hours are left (or over). One story point is 4 working hours; work time counts from when the task entered the in-progress category, only inside `work_schedule` (default Mon–Fri 09:00–18:00, lunch 13:00–14:00). The bar is green below 75 %, yellow up to 100 % and red over budget. Below it, rows from the other workers (`status_board.py`): your next meeting (weekday when it is not today), today's agents (`4 AGENTS 2 ASKS`: sessions active today and times one asked for you, from `agent_stats.py`, reset at midnight), your last finished deploy and the last Slack message, each with a coarse age (`10M`, `2H`, `3D`). The pet sits small in the bottom-right corner and switches to its worried animation when the task is over budget. The card refreshes every 5 min and is uploaded only when its text changes. Disable with `--no-summary`.
+
+Setup: `jira_site` (and optionally `jira_points_field`, `jira_status`, `work_schedule`) in the config, plus an Atlassian API token (https://id.atlassian.com/manage-profile/security/api-tokens) in the Keychain, with your Atlassian email as the account:
+
+```bash
+security add-generic-password -U -s smalltv-openpets-jira -a "you@company.com" -w   # paste the token when prompted
+```
+
 ### Deploys (AWS CodePipeline) and AWS SSO
 
 With `pipeline_repos` and `my_emails` in the config, the bridge watches the CodePipeline pipelines whose CodeCommit source is one of those repos (discovered once a day; scanning every pipeline takes a few minutes) and polls their latest executions every 2 min. An execution is yours when its source commit was authored by one of `my_emails` or one of them appears in the commit message (squash merges list every author). When one of yours starts, a cyan **DEPLOYING...** card shows for 20 s and polling speeds up to every 45 s; when it ends, a green **DEPLOYED** card (`ENV: TICKET subject`) shows for 30 s, or a red **DEPLOY FAILED** card for 45 s. Repointing a CI environment to another branch needs nothing: pipelines are matched by repository, and authors are checked per execution. The first poll is a baseline, so old deploys are never shown.

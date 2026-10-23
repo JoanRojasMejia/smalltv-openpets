@@ -9,7 +9,10 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from PIL import ImageDraw
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # Pillow is only needed by the renderer, not by the bridge
+    from PIL import ImageDraw
 
 PX = 2  # screen pixels per art pixel
 
@@ -131,6 +134,16 @@ def draw_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, color) 
                 if cell == "#":
                     draw.point((x + dx, y + dy), fill=color)
         x += len(rows[0]) + LETTER_GAP
+
+
+def truncate(text: str, width: int) -> str:
+    """One line cut character by character (not by word) to fit, ending in '...' when cut."""
+    text = text.upper()
+    if text_width(text) <= width:
+        return text
+    while text and text_width(text.rstrip() + "...") > width:
+        text = text[:-1]
+    return text.rstrip() + "..."
 
 
 def _split_long(word: str, width: int) -> list[str]:

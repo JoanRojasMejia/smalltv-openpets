@@ -24,6 +24,7 @@ from pathlib import Path
 
 import config
 import setup_device
+from status_board import BOARD
 from pet_sync import GIF_DIR, ROOT, look_args, uv_binary
 
 POLL_SECONDS = 120
@@ -112,9 +113,11 @@ class PipelineWatcher:
         emails = [my_emails] if isinstance(my_emails, str) else list(my_emails)
         self.me = [e.strip().lower() for e in emails if e and e.strip()]
         self.known: set[str] = set()  # finished executions (their authors are not fetched again)
+        self.mine_ids: set[str] = set()
         self.started: set[str] = set()
         self.baselined = False
         self.running_mine = False
+        self.last_mine: dict | None = None  # newest finished Succeeded/Failed execution of yours
 
     def _mine(self, e: dict) -> bool:
         author, summary = (e.get("author") or "").lower(), (e.get("summary") or "").lower()
@@ -124,9 +127,14 @@ class PipelineWatcher:
         executions = self.tool(self.pipelines, self.known)  # may raise SsoExpired
         events, running_mine = [], False
         for e in sorted(executions, key=lambda e: e["updated"]):
+            if e["status"] in self.REPORTED and (self.last_mine is None or e["updated"] > self.last_mine["updated"]) \
+                    and (e["id"] in self.mine_ids or (e["id"] not in self.known and self._mine(e))):
+                self.last_mine = e
             if e["id"] in self.known:
                 continue
             mine = self._mine(e)
+            if mine:
+                self.mine_ids.add(e["id"])
             if e["status"] in self.FINISHED:
                 self.known.add(e["id"])
                 if self.baselined and e["status"] in self.REPORTED and mine:
@@ -187,6 +195,9 @@ class PipelineNotifier:
                     self.log(f"pipelines: {kind} {env_label(e['pipeline'])}")
                     self._show("op-deploy.gif", kind, title, body)
                 fast = watcher.running_mine
+                last = watcher.last_mine
+                BOARD.set("last_deploy", {"env": env_label(last["pipeline"]), "status": last["status"],
+                                          "ts": last["updated"]} if last else None)
                 if sso_until:
                     self.log("aws sso session is valid again")
                 sso_until, error = 0.0, None

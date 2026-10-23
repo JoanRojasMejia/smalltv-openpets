@@ -9,5 +9,20 @@
   ],
   "pipeline_repos": [
     "my-frontend-repo"
-  ]
+  ],
+  "jira_site": "yourcompany.atlassian.net",
+  "jira_status": "In Progress",
+  "jira_points_field": "customfield_10016",
+  "work_schedule": {
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "start": "09:00",
+    "end": "18:00",
+    "lunch": "13:00-14:00"
+  }
 }
