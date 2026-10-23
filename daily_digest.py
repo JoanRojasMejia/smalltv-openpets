@@ -10,6 +10,7 @@ day in DAILY_DIR; the bridge shows the previous workday's digest before your dai
 Usage:
   python3 daily_digest.py generate [--date YYYY-MM-DD]   # build and print a day's digest
   python3 daily_digest.py note "ABC-41: validation done"   # add a note for today
+  python3 daily_digest.py send [--date YYYY-MM-DD]       # send the long digest by iMessage
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time as time_module
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
@@ -32,6 +34,8 @@ DEPLOYS_DIR = STATE / "deploys"
 ENGRAM_DB = Path.home() / ".engram/engram.db"
 MAX_ITEM = 48
 MAX_ITEMS = 3
+MAX_DETAIL = 1800
+WEEKDAYS_FULL_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 GENERATE_AT = time(17, 50)
 SECTIONS = ("ayer", "hoy", "bloqueos")
 
@@ -158,7 +162,11 @@ prepara su resumen para la daily del día siguiente, en español, muy breve:
 - "hoy": lo que sigue (tarea en progreso y su avance, pendientes evidentes; máximo 3 puntos).
 - "bloqueos": impedimentos reales (tickets bloqueados u otros); lista vacía si no hay.
 Cada punto de máximo 45 caracteres, sin emojis, sin inventar nada que no esté en los datos.
-Responde SOLO con JSON: {"ayer": [...], "hoy": [...], "bloqueos": [...]}
+Además, "detalle": un texto plano más completo para leer en el celular antes de la daily (máximo 1500
+caracteres, sin markdown, líneas cortas), con estas partes en este orden: estado por ticket (qué se
+hizo, estado en Jira, avance), commits y PRs agrupados por ticket, despliegues, bloqueos con contexto,
+próximos pasos, y al final "Para decir en la daily:" con 2 o 3 frases en primera persona.
+Responde SOLO con JSON: {"ayer": [...], "hoy": [...], "bloqueos": [...], "detalle": "..."}
 
 DATOS:
 """
@@ -174,7 +182,10 @@ def parse_digest(text: str) -> dict | None:
         return None
     if not all(isinstance(raw.get(k), list) for k in SECTIONS):
         return None
-    return {k: [str(i).strip()[:MAX_ITEM] for i in raw[k] if str(i).strip()][:MAX_ITEMS] for k in SECTIONS}
+    digest = {k: [str(i).strip()[:MAX_ITEM] for i in raw[k] if str(i).strip()][:MAX_ITEMS] for k in SECTIONS}
+    if isinstance(raw.get("detalle"), str) and raw["detalle"].strip():
+        digest["detalle"] = raw["detalle"].strip()[:MAX_DETAIL]
+    return digest
 
 
 def fallback_digest(data: dict) -> dict:
@@ -188,6 +199,103 @@ def fallback_digest(data: dict) -> dict:
     hoy = [f"{data['task']['key']} al {data['task']['percent']}% ({data['task']['left']})"] if data.get("task") else []
     bloqueos = [f"{key} {summary}"[:MAX_ITEM] for key, summary in data["blocked"]]
     return {"ayer": ayer[:MAX_ITEMS], "hoy": hoy[:MAX_ITEMS], "bloqueos": bloqueos[:MAX_ITEMS]}
+
+
+def fallback_detail(data: dict) -> str:
+    """The long version without the model: every fact, grouped."""
+    lines = []
+    if data.get("task"):
+        t = data["task"]
+        lines += [f"Tarea en progreso: {t['key']} {t.get('summary', '')}", f"Avance: {t['percent']}% ({t['left']})", ""]
+    if data["jira_changes"]:
+        lines += ["Cambios en Jira:"] + [f"- {k} {s} -> {st}" for k, s, st in data["jira_changes"]] + [""]
+    if data["commits"]:
+        lines += [f"Commits ({len(data['commits'])}):"] + [f"- {repo}: {subject}" for repo, subject in data["commits"][:10]] + [""]
+    if data["deploys"]:
+        lines.append("Despliegues:")
+        for env, status, *rest in data["deploys"]:
+            subject = rest[0] if rest else ""
+            lines.append(f"- {env} {'OK' if status == 'Succeeded' else 'FALLÓ'} {subject}".rstrip())
+        lines.append("")
+    if data["blocked"]:
+        lines += ["Bloqueos:"] + [f"- {k} {s}" for k, s in data["blocked"]] + [""]
+    if data["notes"]:
+        lines += ["Notas de los agentes:"] + [f"- {n}" for n in data["notes"][:8]] + [""]
+    if data.get("agents"):
+        lines.append(f"Agentes: {data['agents']['sessions']} sesiones, {data['agents']['asks']} pedidos de ayuda")
+    return "\n".join(lines).strip()[:MAX_DETAIL]
+
+
+def message_text(record: dict) -> str:
+    """The long digest as a phone message."""
+    day = date.fromisoformat(record["day"])
+    parts = [f"Daily - {WEEKDAYS_FULL_ES[day.weekday()]} {day:%d/%m}"]
+    for key, empty in (("ayer", "Sin registros"), ("hoy", "Sin pendientes registrados"), ("bloqueos", "Ninguno")):
+        items = record.get(key) or [empty]
+        parts.append(key.upper() + "\n" + "\n".join(f"- {i}" for i in items))
+    if record.get("detalle"):
+        parts.append(record["detalle"])
+    return "\n\n".join(parts)
+
+
+def message_due(now: datetime, daily_starts: list[float]) -> bool:
+    """Send on workdays from 09:00, or 15 minutes before an earlier daily meeting."""
+    if now.weekday() >= 5:
+        return False
+    if now.time() >= time(9, 0):
+        return True
+    return any(0 < start - now.timestamp() <= 15 * 60 for start in daily_starts)
+
+
+SEND_SCRIPT = """on run argv
+    set theText to item 1 of argv
+    set theRecipient to item 2 of argv
+    tell application "Messages"
+        set theService to 1st account whose service type = iMessage
+        send theText to participant theRecipient of theService
+    end tell
+end run"""
+
+
+MESSAGES_DB = Path.home() / "Library/Messages/chat.db"
+APPLE_EPOCH = 978307200  # 2001-01-01, Messages' time origin
+
+
+def delivery_status(to: str, since: float, db: Path = MESSAGES_DB) -> str:
+    """Status of the newest message sent to `to` after `since`: delivered, sent, failed (...) or unknown.
+
+    Reading chat.db may need Full Disk Access; without it the status is "unknown"."""
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            row = con.execute("select m.is_sent, m.is_delivered, m.error from message m join handle h "
+                              "on m.handle_id = h.ROWID where m.is_from_me = 1 and h.id = ? and m.date > ? "
+                              "order by m.date desc limit 1", (to, int((since - APPLE_EPOCH) * 1e9))).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return "unknown"
+    if row is None:
+        return "unknown"
+    is_sent, is_delivered, error = row
+    if error:
+        return f"failed (error {error})"
+    return "delivered" if is_delivered else "sent" if is_sent else "unknown"
+
+
+def send_imessage(to: str, text: str, wait: float = 20) -> str:
+    """Send through the Messages app and report what Messages did with it.
+
+    macOS asks once to allow controlling Messages. Returns delivery_status() after up to `wait` s."""
+    started = time_module.time()
+    subprocess.run(["osascript", "-e", SEND_SCRIPT, text, to], check=True, capture_output=True, timeout=120)
+    status = "unknown"
+    while time_module.time() - started < wait:
+        status = delivery_status(to, started - 1)
+        if status == "delivered" or status.startswith("failed"):
+            break
+        time_module.sleep(2)
+    return status
 
 
 def claude_binary() -> str:
@@ -211,6 +319,7 @@ def synthesize(data: dict) -> tuple[dict, str]:
 def generate(day: date, settings: dict, daily_dir: Path = DAILY_DIR) -> dict:
     data = collect(day, settings)
     digest, source = synthesize(data)
+    digest.setdefault("detalle", fallback_detail(data))
     record = {"day": day.isoformat(), "generated": datetime.now().astimezone().isoformat(timespec="minutes"),
               "source": source, **digest,
               "facts": {k: len(v) if isinstance(v, list) else bool(v) for k, v in data.items() if k != "day"}}
@@ -264,10 +373,23 @@ def main() -> None:
     gen.add_argument("--date", default=None)
     note = sub.add_parser("note")
     note.add_argument("text", nargs="+")
+    send = sub.add_parser("send", help="send a day's long digest by iMessage to imessage_to")
+    send.add_argument("--date", default=None)
     args = parser.parse_args()
     if args.cmd == "note":
         add_note(" ".join(args.text))
         print("noted")
+        return
+    if args.cmd == "send":
+        settings = config.load()
+        day = date.fromisoformat(args.date) if args.date else previous_workday(date.today())
+        record = load_digest(day)
+        if not record or not record.get("detalle"):
+            record = generate(day, settings)
+        status = send_imessage(settings["imessage_to"], message_text(record))
+        print(f"{day} digest: {status}")
+        if status.startswith("failed"):
+            sys.exit(1)
         return
     day = date.fromisoformat(args.date) if args.date else digest_due(datetime.now().astimezone(), set()) or date.today()
     record = generate(day, config.load())

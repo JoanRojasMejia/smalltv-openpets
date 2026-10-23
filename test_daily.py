@@ -92,6 +92,72 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(dd.daily_slot(start + 30, start), None)
 
 
+class LongVersionTest(unittest.TestCase):
+    DATA = {"commits": [["web-app", "[ABC-41] feat(form): validation"], ["web-app", "[ABC-41] fix: typo"]],
+            "jira_changes": [["ABC-41", "Form validation", "En Progreso"]],
+            "task": {"key": "ABC-41", "summary": "Form validation", "percent": 95, "left": "1.2 H LEFT"},
+            "blocked": [["ABC-35", "Waiting for backend"]], "deploys": [["SHOP-CI5", "Succeeded", "ABC-41 validation"]],
+            "memories": [], "notes": ["11:05 [web-app] ABC-41: form done"], "agents": {"sessions": 3, "asks": 1}}
+
+    def test_detail_is_optional_and_trimmed(self):
+        got = dd.parse_digest(json.dumps({"ayer": ["a"], "hoy": [], "bloqueos": [], "detalle": "x" * 5000}))
+        self.assertEqual(len(got["detalle"]), dd.MAX_DETAIL)
+        self.assertNotIn("detalle", dd.parse_digest('{"ayer": [], "hoy": [], "bloqueos": []}'))
+
+    def test_fallback_detail_lists_every_fact(self):
+        text = dd.fallback_detail(self.DATA)
+        for expected in ("ABC-41", "validation", "SHOP-CI5", "ABC-35", "95%", "form done", "3 sesiones"):
+            self.assertIn(expected, text)
+
+    def test_message_text(self):
+        record = {"day": "2026-10-22", "ayer": ["a1"], "hoy": ["h1"], "bloqueos": [], "detalle": "Detalle largo."}
+        text = dd.message_text(record)
+        self.assertTrue(text.startswith("Daily - jueves 22/10"))
+        self.assertIn("AYER\n- a1", text)
+        self.assertIn("BLOQUEOS\n- Ninguno", text)
+        self.assertTrue(text.endswith("Detalle largo."))
+
+    def test_send_time(self):
+        nine = datetime(2026, 10, 23, 9, 0, tzinfo=TZ)
+        daily_at = lambda h, m: datetime(2026, 10, 23, h, m, tzinfo=TZ).timestamp()
+        self.assertFalse(dd.message_due(nine.replace(hour=8, minute=59), [daily_at(10, 0)]))
+        self.assertTrue(dd.message_due(nine, [daily_at(10, 0)]))
+        self.assertTrue(dd.message_due(nine.replace(hour=8, minute=46), [daily_at(9, 0)]))  # early daily: 15 min before
+        self.assertFalse(dd.message_due(datetime(2026, 10, 24, 10, 0, tzinfo=TZ), []))      # Saturday
+
+
+class DeliveryTest(unittest.TestCase):
+    def make_db(self, rows):
+        d = tempfile.mkdtemp()
+        db = Path(d) / "chat.db"
+        con = sqlite3.connect(db)
+        con.execute("create table handle (ROWID integer primary key, id text)")
+        con.execute("create table message (ROWID integer primary key, handle_id int, is_from_me int, date int, "
+                    "is_sent int, is_delivered int, error int)")
+        con.execute("insert into handle values (1, '+15550001')")
+        con.executemany("insert into message (handle_id, is_from_me, date, is_sent, is_delivered, error) "
+                        "values (1, 1, ?, ?, ?, ?)", rows)
+        con.commit()
+        con.close()
+        return db
+
+    def apple(self, unix):  # Messages stores nanoseconds since 2001-01-01
+        return int((unix - 978307200) * 1e9)
+
+    def test_statuses(self):
+        db = self.make_db([(self.apple(1000), 1, 1, 0)])
+        self.assertEqual(dd.delivery_status("+15550001", since=990, db=db), "delivered")
+        db = self.make_db([(self.apple(1000), 0, 0, 33)])
+        self.assertEqual(dd.delivery_status("+15550001", since=990, db=db), "failed (error 33)")
+        db = self.make_db([(self.apple(1000), 1, 0, 0)])
+        self.assertEqual(dd.delivery_status("+15550001", since=990, db=db), "sent")
+
+    def test_unknown_when_nothing_new_or_unreadable(self):
+        db = self.make_db([(self.apple(900), 1, 1, 0)])
+        self.assertEqual(dd.delivery_status("+15550001", since=990, db=db), "unknown")
+        self.assertEqual(dd.delivery_status("+15550001", since=0, db=Path("/nonexistent/chat.db")), "unknown")
+
+
 class PagesTest(unittest.TestCase):
     def test_pages_and_empty_sections(self):
         from daily_notifier import digest_pages

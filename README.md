@@ -86,6 +86,8 @@ security add-generic-password -U -s smalltv-openpets-jira -a "you@company.com" -
 
 The bridge generates each workday's digest at 17:50 (or the next morning if the Mac was off) and shows the previous workday's digest as three full-screen pages: when the workday starts (09:00) and 10 and 3 minutes before any meeting whose title contains `daily_meeting_match` (default "daily"). Disable with `--no-daily`.
 
+**Long version on your phone.** Each digest also has a longer plain-text `detalle` (status per ticket, commits and PRs, deploys, blockers with context, next steps and 2–3 sentences to say in the stand-up). With `imessage_to` in the config (your personal number or Apple ID), the bridge sends it by iMessage through the Messages app once per workday, from 09:00 or 15 minutes before an earlier daily meeting. macOS asks once to let Python control Messages (System Settings → Privacy & Security → Automation). `python3 daily_digest.py send [--date ...]` sends one by hand. After sending, the bridge reads the Messages database to confirm delivery (`delivered` / `failed (error N)`; `unknown` if it lacks Full Disk Access) and retries a failed send after 30 min. Messages must be signed in to iMessage on the Mac.
+
 Agents can add notes for the digest:
 
 ```bash

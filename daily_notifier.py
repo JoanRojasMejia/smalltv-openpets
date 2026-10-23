@@ -1,6 +1,8 @@
 """Background worker for the stand-up digest.
 
 - Generates each workday's digest at 17:50 (or the next morning if the Mac was off).
+- Sends the previous workday's long digest by iMessage to `imessage_to` once per workday
+  (from 09:00, or 15 minutes before an earlier daily meeting).
 - Shows the previous workday's digest as three full-screen pages (AYER / HOY / BLOQUEOS):
   once when the workday starts (first check after 09:00) and 10 and 3 minutes before any
   meeting whose title contains `daily_meeting_match` (config, default "daily").
@@ -45,6 +47,7 @@ class DailyNotifier:
         self.settings = settings
         self.match = (settings.get("daily_meeting_match") or "daily").lower()
         self.shown: set[tuple] = set()
+        self.next_send_try = 0.0
         self.ready: queue.Queue[tuple[str, float]] = queue.Queue()
 
     @classmethod
@@ -82,14 +85,33 @@ class DailyNotifier:
         if today.weekday() < 5 and now.hour >= MORNING_HOUR and ("morning", today) not in self.shown:
             self.shown.add(("morning", today))
             self._show_digest(today, "morning")
-        for meeting in (BOARD.snapshot().get("meetings") or {}).get("items", []):
-            if self.match not in meeting.get("title", "").lower():
-                continue
+        dailies = [m for m in (BOARD.snapshot().get("meetings") or {}).get("items", [])
+                   if self.match in m.get("title", "").lower()]
+        self._maybe_send_message(now, [m["start"] for m in dailies])
+        for meeting in dailies:
             slot = dd.daily_slot(now.timestamp(), meeting["start"])
             key = (meeting.get("uid"), meeting["start"], slot)
             if slot and key not in self.shown:
                 self.shown.add(key)
                 self._show_digest(today, f"{slot} min before {meeting['title']}")
+
+    def _maybe_send_message(self, now: datetime, daily_starts: list[float]) -> None:
+        """Once per workday: the long digest of the previous workday to your phone (iMessage)."""
+        to = self.settings.get("imessage_to")
+        marker = dd.DAILY_DIR / f"{now.date().isoformat()}.sent"
+        if not to or marker.exists() or not dd.message_due(now, daily_starts) or time.time() < self.next_send_try:
+            return
+        day = dd.previous_workday(now.date())
+        record = dd.load_digest(day)
+        if not record or not record.get("detalle"):
+            record = dd.generate(day, self.settings)
+        status = dd.send_imessage(to, dd.message_text(record))
+        self.log(f"daily: {day} digest by iMessage: {status}")
+        if status.startswith("failed"):
+            self.next_send_try = time.time() + 1800  # retry in 30 min instead of marking it sent
+            return
+        dd.DAILY_DIR.mkdir(parents=True, exist_ok=True)
+        marker.write_text(now.isoformat(timespec="minutes"))
 
     def _show_digest(self, today: date, reason: str) -> None:
         day = dd.previous_workday(today)
