@@ -298,9 +298,10 @@ ROW_STYLES = {  # summary row kind -> (color, icon)
 }
 
 
-def task_box(d: ImageDraw.ImageDraw, title: str, percent: int | None, line: str, text: str, frame: int) -> int:
-    """Story-point box at the top; returns its bottom y."""
-    color = summary_color(percent)
+def task_box(d: ImageDraw.ImageDraw, title: str, percent: int | None, line: str, text: str, frame: int,
+             review: bool = False) -> int:
+    """Story-point box at the top (blue while the task is in review); returns its bottom y."""
+    color = (90, 170, 255) if review else summary_color(percent)
     x0, y0, x1 = M, M + 1, LOW - M - 1
     pad = 4
     bar_y = y0 + pad + px.GLYPH_H + 3
@@ -326,9 +327,9 @@ def task_box(d: ImageDraw.ImageDraw, title: str, percent: int | None, line: str,
 
 
 def summary_layer(layer: Image.Image, title: str, percent: int | None, line: str, text: str,
-                  rows: list, frame: int) -> None:
+                  rows: list, frame: int, review: bool = False) -> None:
     d = ImageDraw.Draw(layer)
-    y = (task_box(d, title, percent, line, text, frame) + 6) if title else M + 2
+    y = (task_box(d, title, percent, line, text, frame, review) + 6) if title else M + 2
     x0, x1 = M + 1, LOW - M - 1
     for kind, row_text in rows[:4]:
         color, icon = ROW_STYLES.get(kind, ((200, 200, 200), px.ICONS["idle"]))
@@ -348,7 +349,7 @@ PET_TOP_ART = (SIZE - MARGIN - SUMMARY_PET_H) // px.PX
 
 
 def build_summary_gif(sheet: Image.Image, title: str, percent: int | None, line: str, text: str,
-                      rows: list, out: Path) -> int:
+                      rows: list, out: Path, review: bool = False) -> int:
     """The idle screen: story-point progress and today's facts, with a small resting pet.
 
     Over budget, the pet switches to its worried ("failed") animation.
@@ -362,7 +363,7 @@ def build_summary_gif(sheet: Image.Image, title: str, percent: int | None, line:
         pet = cell.resize((SUMMARY_PET_W, SUMMARY_PET_H), Image.LANCZOS)
         canvas.paste(pet, (SIZE - MARGIN - SUMMARY_PET_W, SIZE - MARGIN - SUMMARY_PET_H), pet)
         layer = Image.new("RGBA", (LOW, LOW), (0, 0, 0, 0))
-        summary_layer(layer, title, percent, line, text, rows, col)
+        summary_layer(layer, title, percent, line, text, rows, col, review)
         big = layer.resize((SIZE, SIZE), Image.NEAREST)
         canvas.paste(big, (0, 0), big)
         images.append(canvas.quantize(colors=64, dither=Image.Dither.NONE))
@@ -491,6 +492,7 @@ def main() -> None:
                         help="render only the idle summary GIF (op-summary.gif) with this title")
     parser.add_argument("--summary-percent", default="", help="story-point budget used, empty if unknown")
     parser.add_argument("--summary-line", default="", help="e.g. '10 H LEFT'")
+    parser.add_argument("--summary-review", action="store_true", help="the task is in review (blue card)")
     parser.add_argument("--summary-rows", default="[]", help='JSON [[kind, text], ...] (meeting, deploy_ok, ...)')
     parser.add_argument("--card", default=None, choices=["running", "ok", "failed", "sso", "jira", "daily"],
                         help="render only a generic notification card (op-card.gif) with --card-title and --message-text")
@@ -535,7 +537,7 @@ def main() -> None:
     if args.summary_title is not None:
         percent = int(args.summary_percent) if args.summary_percent.strip() else None
         size = build_summary_gif(sheet, args.summary_title, percent, args.summary_line, args.message_text,
-                                 json.loads(args.summary_rows), out_dir / "op-summary.gif")
+                                 json.loads(args.summary_rows), out_dir / "op-summary.gif", review=args.summary_review)
         print(f"op-summary.gif  {size // 1024} KB")
         return
     if args.card is not None and args.page:

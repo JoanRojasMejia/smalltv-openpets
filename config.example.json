@@ -33,5 +33,6 @@
   ],
   "daily_meeting_match": "daily",
   "jira_blocked_status": "Blocked",
-  "imessage_to": "+15555550123"
+  "imessage_to": "+15555550123",
+  "jira_review_status": "In Review"
 }

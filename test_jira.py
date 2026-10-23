@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from jira_source import Schedule, parse_issue, progress, summary_text, worked_hours
+from jira_source import Schedule, last_status_change, parse_issue, pick_task, progress, summary_text, worked_hours
 
 BOGOTA = timezone(timedelta(hours=-5))
 S = Schedule()  # Mon-Fri 09:00-18:00, lunch 13:00-14:00 -> 8 h/day
@@ -50,6 +50,48 @@ class ProgressTest(unittest.TestCase):
         self.assertEqual(summary_text(task, worked=14), ("ABC-41 - 6 SP", 58, "10 H LEFT", "Rename documents"))
         self.assertEqual(summary_text(task, worked=25.5), ("ABC-41 - 6 SP", 106, "1.5 H OVER", "Rename documents"))
         self.assertEqual(summary_text(dict(task, points=None), worked=3)[1:3], (None, "NO STORY POINTS"))
+
+
+class ReviewFallbackTest(unittest.TestCase):
+    RAW = {"key": "ABC-41", "fields": {"summary": "FE - x", "customfield_10105": 6,
+                                       "statuscategorychangedate": "2026-10-20T12:11:29.769-0300"}}
+
+    def search(self, in_progress, in_review):
+        def run(jql, fields, limit):
+            return in_progress if '"En Progreso"' in jql else in_review if '"PR PROD"' in jql else []
+        return run
+
+    def test_in_progress_wins(self):
+        task = pick_task(self.search([self.RAW], [dict(self.RAW, key="ABC-9")]), "En Progreso", "PR PROD",
+                         "customfield_10105", review_since=lambda key: None)
+        self.assertEqual((task["key"], task["in_review"]), ("ABC-41", False))
+
+    def test_falls_back_to_the_latest_task_in_review(self):
+        task = pick_task(self.search([], [self.RAW]), "En Progreso", "PR PROD", "customfield_10105",
+                         review_since=lambda key: datetime(2026, 10, 23, 15, 0, tzinfo=timezone.utc))
+        self.assertEqual((task["key"], task["in_review"]), ("ABC-41", True))
+        self.assertEqual(task["review_since"], datetime(2026, 10, 23, 15, 0, tzinfo=timezone.utc))
+
+    def test_nothing_anywhere(self):
+        self.assertIsNone(pick_task(self.search([], []), "En Progreso", "PR PROD", "customfield_10105",
+                                    review_since=lambda key: None))
+        self.assertIsNone(pick_task(self.search([], [self.RAW]), "En Progreso", "", "customfield_10105",
+                                    review_since=lambda key: None))
+
+    def test_last_entry_into_review_from_changelog(self):
+        histories = [
+            {"created": "2026-10-21T10:00:00.000-0300", "items": [{"field": "status", "toString": "PR PROD"}]},
+            {"created": "2026-10-22T09:00:00.000-0300", "items": [{"field": "status", "toString": "En Progreso"}]},
+            {"created": "2026-10-23T11:30:00.000-0300", "items": [{"field": "status", "toString": "PR PROD"}]},
+            {"created": "2026-10-23T12:00:00.000-0300", "items": [{"field": "assignee", "toString": "Ana"}]},
+        ]
+        self.assertEqual(last_status_change(histories, "PR PROD"),
+                         datetime(2026, 10, 23, 14, 30, tzinfo=timezone.utc))
+        self.assertIsNone(last_status_change(histories, "Done"))
+
+    def test_review_card_text(self):
+        task = {"key": "ABC-41", "points": 6, "summary": "FE - [web-app] Rename", "in_review": True}
+        self.assertEqual(summary_text(task, worked=22.8), ("ABC-41 - 6 SP", 95, "IN REVIEW", "Rename"))
 
 
 class ParseIssueTest(unittest.TestCase):

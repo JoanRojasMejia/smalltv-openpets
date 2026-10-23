@@ -141,12 +141,12 @@ def collect(day: date, settings: dict) -> dict:
                                               f'"{settings.get("jira_blocked_status", "Bloqueado")}"', "summary")
             data["blocked"] = [[i["key"], jira_source.clean_summary(i["fields"]["summary"])] for i in blocked]
             task = jira_source.fetch_current_task(site, *credentials, settings.get("jira_status") or "En Progreso",
-                                                  settings.get("jira_points_field") or "customfield_10105")
+                                                  settings.get("jira_points_field") or "customfield_10105",
+                                                  settings.get("jira_review_status", "PR PROD"))
             if task:
-                started = task["started"] or datetime.now(timezone.utc)
                 end = min(datetime.now(timezone.utc), _local_day_bounds(day, None)[1].astimezone(timezone.utc))
-                worked = jira_source.worked_hours(started, end,
-                                                  jira_source.Schedule.from_config(settings.get("work_schedule")))
+                worked = jira_source.task_worked_hours(
+                    task, jira_source.Schedule.from_config(settings.get("work_schedule")), now=end)
                 _, percent, left, summary = jira_source.summary_text(task, worked)
                 data["task"] = {"key": task["key"], "summary": summary, "percent": percent, "left": left}
         except Exception:

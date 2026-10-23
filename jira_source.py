@@ -2,7 +2,8 @@
 workers leave on the status board (next meeting, last deploy, last Slack message).
 
 1 story point = HOURS_PER_POINT working hours. The task is the newest one assigned to you
-in status `jira_status` (config, default "En Progreso"); work time is counted from when it
+in status `jira_status` (config, default "En Progreso"), or, when there is none, the newest in
+`jira_review_status` (default "PR PROD"), shown as IN REVIEW with its time frozen when it entered review; work time is counted from when it
 entered the in-progress category, only within your working schedule (config `work_schedule`,
 default Mon-Fri 09:00-18:00 with lunch 13:00-14:00).
 
@@ -112,6 +113,8 @@ def summary_text(task: dict, worked: float) -> tuple[str, int | None, str, str]:
     if result is None:
         return title, None, "NO STORY POINTS", summary
     percent, left = result
+    if task.get("in_review"):
+        return title, percent, "IN REVIEW", summary
     line = f"{_hours(left)} H LEFT" if left >= 0 else f"{_hours(-left)} H OVER"
     return title, percent, line, summary
 
@@ -152,10 +155,60 @@ def jira_search(site: str, email: str, token: str, jql: str, fields: str, limit:
         return json.load(resp).get("issues") or []
 
 
-def fetch_current_task(site: str, email: str, token: str, status: str, points_field: str) -> dict | None:
-    jql = f'assignee = currentUser() AND status = "{status}" ORDER BY updated DESC'
-    issues = jira_search(site, email, token, jql, f"summary,{points_field},statuscategorychangedate", limit=5)
-    return parse_issue(issues[0], points_field) if issues else None
+def _jira_time(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f%z")
+    except (TypeError, ValueError):
+        return None
+
+
+def last_status_change(histories: list[dict], status: str) -> datetime | None:
+    """When the issue last moved into `status`, from its changelog histories."""
+    moments = [_jira_time(h.get("created")) for h in histories
+               for item in h.get("items", []) if item.get("field") == "status" and item.get("toString") == status]
+    moments = [m for m in moments if m]
+    return max(moments) if moments else None
+
+
+def pick_task(search, status: str, review_status: str, points_field: str, review_since) -> dict | None:
+    """The newest task in `status`; if there is none, the newest in `review_status`, marked in_review.
+
+    search(jql, fields, limit) -> raw issues; review_since(key) -> when that task entered review."""
+    fields = f"summary,{points_field},statuscategorychangedate"
+    for wanted, in_review in ((status, False), (review_status, True)):
+        if not wanted:
+            continue
+        issues = search(f'assignee = currentUser() AND status = "{wanted}" ORDER BY updated DESC', fields, 5)
+        if issues:
+            task = parse_issue(issues[0], points_field)
+            task["in_review"] = in_review
+            if in_review:
+                task["review_since"] = review_since(task["key"])
+            return task
+    return None
+
+
+def fetch_review_since(site: str, email: str, token: str, key: str, status: str) -> datetime | None:
+    auth = base64.b64encode(f"{email}:{token}".encode()).decode()
+    req = urllib.request.Request(f"https://{site}/rest/api/3/issue/{urllib.parse.quote(key)}?expand=changelog&fields=status",
+                                 headers={"Authorization": f"Basic {auth}", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        histories = (json.load(resp).get("changelog") or {}).get("histories") or []
+    return last_status_change(histories, status)
+
+
+def fetch_current_task(site: str, email: str, token: str, status: str, points_field: str,
+                       review_status: str = "") -> dict | None:
+    return pick_task(lambda jql, fields, limit: jira_search(site, email, token, jql, fields, limit),
+                     status, review_status, points_field,
+                     lambda key: fetch_review_since(site, email, token, key, review_status))
+
+
+def task_worked_hours(task: dict, schedule: Schedule, now: datetime | None = None) -> float:
+    """Working hours spent on a task; a task in review stops counting when it entered review."""
+    now = now or datetime.now(timezone.utc)
+    end = task.get("review_since") if task.get("in_review") and task.get("review_since") else now
+    return worked_hours(task["started"] or now, min(end, now), schedule)
 
 
 def open_tickets(site: str, email: str, token: str, keys: list[str]) -> list[dict]:
@@ -184,6 +237,7 @@ class SummaryNotifier:
         self.site = site
         self.credentials = credentials
         self.status = settings.get("jira_status") or "En Progreso"
+        self.review_status = settings.get("jira_review_status", "PR PROD")
         self.points_field = settings.get("jira_points_field") or "customfield_10105"
         self.schedule = Schedule.from_config(settings.get("work_schedule"))
         self.lock = threading.Lock()
@@ -224,11 +278,11 @@ class SummaryNotifier:
                     continue
                 self.log("idle summary enabled (Jira story points)")
             try:
-                task = fetch_current_task(self.site, *self.credentials, self.status, self.points_field)
+                task = fetch_current_task(self.site, *self.credentials, self.status, self.points_field,
+                                          self.review_status)
                 card = None
                 if task:
-                    started = task["started"] or datetime.now(timezone.utc)
-                    card = summary_text(task, worked_hours(started, datetime.now(timezone.utc), self.schedule))
+                    card = summary_text(task, task_worked_hours(task, self.schedule))
                 rows = summary_rows(BOARD.snapshot(), time.time())
                 if not card and not rows:
                     with self.lock:
@@ -252,7 +306,7 @@ class SummaryNotifier:
                             *look_args(), "--out", tmp, "--summary-title", title,
                             "--summary-percent", "" if percent is None else str(percent),
                             "--summary-line", line, "--message-text", summary,
-                            "--summary-rows", json.dumps(rows)],
+                            "--summary-rows", json.dumps(rows), *(["--summary-review"] if line == "IN REVIEW" else [])],
                            check=True, cwd=ROOT, capture_output=True, timeout=120)
             shutil.copy2(Path(tmp) / "op-summary.gif", GIF_DIR / "op-summary.gif")
         setup_device.upload_verified(self.host, GIF_DIR / "op-summary.gif")
