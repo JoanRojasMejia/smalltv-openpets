@@ -111,6 +111,13 @@ MESSAGE_ICON = ["#######", "##...##", "#.#.#.#", "#..#..#", "#.....#", "#.....#"
 
 WAITING_ACCENT = STATES["waiting"][4]
 MEETING_ACCENT = (90, 170, 255)
+LOCK_ICON = ["..###..", ".#...#.", ".#...#.", "#######", "###.###", "###.###", "#######"]
+CARDS = {  # --card kind -> (accent, icon)
+    "running": ((60, 200, 220), ["#######", ".#...#.", "..#.#..", "...#...", "..#.#..", ".#...#.", "#######"]),
+    "ok": ((80, 220, 100), px.ICONS["done"]),
+    "failed": ((255, 70, 70), px.ICONS["error"]),
+    "sso": ((255, 150, 40), LOCK_ICON),
+}
 MEETING_ICON = [".#...#.", "#######", "#.....#", "#.#.#.#", "#.....#", "#.#.#.#", "#######"]
 
 
@@ -349,6 +356,9 @@ def main() -> None:
     parser.add_argument("--style", choices=["sticker", "neon", "rpg", "soft"], default="neon")
     parser.add_argument("--out", default="gifs")
     parser.add_argument("--only", default="", help="comma-separated states to render (default: all)")
+    parser.add_argument("--card", default=None, choices=["running", "ok", "failed", "sso"],
+                        help="render only a generic notification card (op-card.gif) with --card-title and --message-text")
+    parser.add_argument("--card-title", default="")
     parser.add_argument("--meeting-title", default=None,
                         help="render only a meeting reminder GIF (op-meeting.gif); text from --message-text")
     parser.add_argument("--waiting-detail", default=None,
@@ -377,6 +387,13 @@ def main() -> None:
         verdict = None if args.calcifer == "comment" else args.calcifer
         size = build_calcifer_gif(sheet, verdict, args.message_text, out_dir / "op-calcifer.gif")
         print(f"op-calcifer.gif  {size // 1024} KB")
+        return
+    if args.card is not None:
+        accent, icon = CARDS[args.card]
+        body = px.wrap(px.normalize_text(args.message_text) or "...", message_width(), max_lines=MESSAGE_LINES - 1)
+        size = build_message_gif(sheet, px.normalize_text(args.card_title or args.card), body,
+                                 out_dir / "op-card.gif", accent=accent, icon=icon)
+        print(f"op-card.gif  {size // 1024} KB")
         return
     if args.meeting_title is not None:
         body = px.wrap(px.normalize_text(args.message_text) or "...", message_width(), max_lines=MESSAGE_LINES - 1)

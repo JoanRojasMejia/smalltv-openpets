@@ -28,6 +28,7 @@ import session_store
 import setup_device
 from pet_sync import PetSyncer
 from calendar_source import CalendarNotifier
+from pipeline_source import PipelineNotifier
 from slack_notifier import SlackNotifier
 from states import REACTION_TO_STATE, device_path
 
@@ -304,12 +305,13 @@ class WaitingDetail:
 
 
 def run_sessions(host: str, state_dir: Path, dry_run: bool, poll: float, pet_sync: bool, slack: bool,
-                 calendar: bool) -> None:
+                 calendar: bool, pipelines: bool) -> None:
     display = make_display(host, dry_run)
     watcher = SessionWatcher(state_dir)
     syncer = PetSyncer(host, log=log) if pet_sync and not dry_run else None
     notifiers = [n for n in (SlackNotifier.start(host, log) if slack and not dry_run else None,
-                             CalendarNotifier.start(host, log) if calendar and not dry_run else None) if n]
+                             CalendarNotifier.start(host, log) if calendar and not dry_run else None,
+                             PipelineNotifier.start(host, log) if pipelines and not dry_run else None) if n]
     overlay = MessageOverlay()
     detail = WaitingDetail(lambda lines: render_waiting_detail(host, lines)) if not dry_run else None
 
@@ -392,6 +394,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="print requests instead of sending them")
     parser.add_argument("--no-slack", action="store_true", help="do not show Slack DMs and mentions")
     parser.add_argument("--no-calendar", action="store_true", help="do not show meeting reminders")
+    parser.add_argument("--no-pipelines", action="store_true", help="do not show CodePipeline deploys / AWS SSO expiry")
     parser.add_argument("--no-pet-sync", action="store_true",
                         help="do not re-render and upload the GIFs when the OpenPets pet changes")
     parser.add_argument("--poll", type=float, default=0.5, help="seconds between log reads")
@@ -401,7 +404,8 @@ def main() -> None:
     try:
         if args.source == "sessions":
             run_sessions(args.host, args.state_dir, args.dry_run, args.poll,
-                         pet_sync=not args.no_pet_sync, slack=not args.no_slack, calendar=not args.no_calendar)
+                         pet_sync=not args.no_pet_sync, slack=not args.no_slack, calendar=not args.no_calendar,
+                         pipelines=not args.no_pipelines)
         else:
             run(args.host, args.log, args.dry_run, args.poll)
     except KeyboardInterrupt:

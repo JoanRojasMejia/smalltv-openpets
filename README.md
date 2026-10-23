@@ -32,6 +32,8 @@ Personal settings live outside the repository in `~/.config/smalltv-openpets/con
 | --- | --- |
 | `host` | The screen's IP address (overridden by `--host` or `SMALLTV_HOST`). |
 | `calcifer_user`, `calcifer_channel` | Optional. Slack ids of a PR review bot and the channel where it answers (see *Review bot verdicts*). |
+| `pipeline_repos`, `my_emails` | Optional. CodeCommit repos whose pipelines to watch, and the commit emails that mark a deploy as yours. |
+| `aws_profile` | Optional. AWS CLI profile for the pipeline queries (default profile otherwise). |
 
 Secrets never go in files: the Slack token and the optional iCal address live in the macOS Keychain.
 
@@ -68,6 +70,12 @@ An optional `calendars.txt` (one calendar name per line) limits reminders to the
 
 Fallback when EventKit is not an option: a Google Calendar secret iCal address in the Keychain (`security add-generic-password -U -s smalltv-openpets-calendar -a "$USER" -w`), read by `tools/calendar_events.py` through `uv` with `icalendar` + `recurring-ical-events`. Many Google Workspace domains disable secret addresses.
 
+### Deploys (AWS CodePipeline) and AWS SSO
+
+With `pipeline_repos` and `my_emails` in the config, the bridge watches the CodePipeline pipelines whose CodeCommit source is one of those repos (discovered once a day; scanning every pipeline takes a few minutes) and polls their latest executions every 2 min. An execution is yours when its source commit was authored by one of `my_emails` or one of them appears in the commit message (squash merges list every author). When one of yours starts, a cyan **DEPLOYING...** card shows for 20 s and polling speeds up to every 45 s; when it ends, a green **DEPLOYED** card (`ENV: TICKET subject`) shows for 30 s, or a red **DEPLOY FAILED** card for 45 s. Repointing a CI environment to another branch needs nothing: pipelines are matched by repository, and authors are checked per execution. The first poll is a baseline, so old deploys are never shown.
+
+It uses your normal AWS CLI credentials through boto3 (`tools/aws_pipelines.py`, run with `uv`; optional `aws_profile` in the config). When the SSO session expires, the screen shows **AWS LOGIN NEEDED — run `aws sso login`** and repeats it every 30 min until the session works again. Disable with `--no-pipelines`.
+
 ### Pet sync
 
 The bridge checks the OpenPets default pet (`preferences.defaultPetId` in `~/Library/Application Support/@open-pets/desktop/openpets-state.json`) every 5 s. When it differs from the pet on the screen (`gifs/.pet`), it runs `pet_sync.py` in the background. The GIF of the state currently on screen is rendered, uploaded and shown first (the new pet appears within a few seconds); the other six follow (about 40 s), then the bridge reloads the current state. A state change during the sync can briefly show the previous pet. A failed sync is retried after 10 min. Pets need a raster spritesheet (`.webp`/`.png`) in the OpenPets pets folder; the built-in Hoodie Cat lives inside the app bundle and is not supported. Disable with `--no-pet-sync`.
@@ -85,6 +93,7 @@ The bridge checks the OpenPets default pet (`preferences.defaultPetId` in `~/Lib
 - `setup_device.py` — uploads the GIFs and pins the Photo Album theme. Dry run unless `--apply`; `--replace` re-uploads existing GIFs.
 - `slack_source.py` / `slack_notifier.py` — Slack poller (Keychain token, DMs + mentions) and the worker that renders/uploads the message GIF.
 - `pet_sync.py` — renders + uploads a pet's GIFs (`--pet <id>`, default: the OpenPets pet); used by the bridge.
+- `pipeline_source.py`, `tools/aws_pipelines.py` — CodePipeline deploy notifications and AWS SSO expiry.
 - `config.py` — loads `~/.config/smalltv-openpets/config.json`.
 - `calendar_source.py`, `tools/CalendarEvents.swift` — meeting reminders and the EventKit helper.
 - `launchd/` — LaunchAgent template and installer (runs the bridge at login, restarts it if it dies).
@@ -97,7 +106,7 @@ python3 install_hooks.py --apply                     # Claude Code + OpenCode ho
 uv run --with pillow python make_gifs.py --pet miss-minute
 python3 setup_device.py --host <screen-ip> --replace --apply
 python3 bridge.py --dry-run                          # watch without touching the screen
-python3 -m unittest test_bridge test_sessions test_pet_sync test_slack test_calendar
+python3 -m unittest test_bridge test_sessions test_pet_sync test_slack test_calendar test_pipelines
 uv run --with icalendar --with recurring-ical-events python -m unittest tools/test_calendar_events.py
 node --test hooks/smalltv-openpets.test.mjs
 ```
