@@ -82,18 +82,19 @@ class DailyNotifier:
             record = dd.generate(due, self.settings)
             self.log(f"daily: digest for {due} ready ({record['source']})")
         today = now.date()
-        if today.weekday() < 5 and now.hour >= MORNING_HOUR and ("morning", today) not in self.shown:
-            self.shown.add(("morning", today))
-            self._show_digest(today, "morning")
         dailies = [m for m in (BOARD.snapshot().get("meetings") or {}).get("items", [])
                    if self.match in m.get("title", "").lower()]
         self._maybe_send_message(now, [m["start"] for m in dailies])
+        if today.weekday() < 5 and now.hour >= MORNING_HOUR and ("morning", today) not in self.shown:
+            self._show_digest(today, "morning")  # raises on failure (e.g. Wi-Fi not back after sleep): retried next tick
+            self.shown.add(("morning", today))
+
         for meeting in dailies:
             slot = dd.daily_slot(now.timestamp(), meeting["start"])
             key = (meeting.get("uid"), meeting["start"], slot)
             if slot and key not in self.shown:
-                self.shown.add(key)
                 self._show_digest(today, f"{slot} min before {meeting['title']}")
+                self.shown.add(key)
 
     def _maybe_send_message(self, now: datetime, daily_starts: list[float]) -> None:
         """Once per workday: the long digest of the previous workday to your phone (iMessage)."""
