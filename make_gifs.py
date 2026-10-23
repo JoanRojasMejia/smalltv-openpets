@@ -353,6 +353,7 @@ def build_state_gif(sheet: Image.Image, state: str, out: Path, style: str, pet_n
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pet", default="miss-minute")
+    parser.add_argument("--outfit", default="default", help="OpenPets wardrobe outfit id (default look otherwise)")
     parser.add_argument("--style", choices=["sticker", "neon", "rpg", "soft"], default="neon")
     parser.add_argument("--out", default="gifs")
     parser.add_argument("--only", default="", help="comma-separated states to render (default: all)")
@@ -375,6 +376,12 @@ def main() -> None:
     except (OSError, ValueError) as exc:
         raise SystemExit(f"pet '{args.pet}' not found in {PETS_DIR}: {exc}")
     sheet_path = pet_dir / meta.get("spritesheetPath", "spritesheet.webp")
+    if args.outfit and args.outfit != "default":
+        outfits = {o.get("id"): o for o in (meta.get("wardrobe") or {}).get("outfits", [])}
+        if args.outfit in outfits:
+            sheet_path = pet_dir / outfits[args.outfit]["spritesheetPath"]
+        else:
+            print(f"unknown outfit {args.outfit!r} for {args.pet}; using the default look")
     if sheet_path.suffix.lower() not in (".webp", ".png"):
         raise SystemExit(f"unsupported spritesheet format: {sheet_path.name}")
     sheet = Image.open(sheet_path).convert("RGBA")

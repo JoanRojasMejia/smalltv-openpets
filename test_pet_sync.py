@@ -34,7 +34,8 @@ class PetSyncerTest(unittest.TestCase):
         d = Path(self.tmp.name)
         self.state, self.stamp = d / "state.json", d / ".pet"
         self.runner = FakeRunner()
-        self.syncer = PetSyncer("h", self.state, self.stamp, check_every=5, runner=self.runner, log=lambda m: None)
+        self.syncer = PetSyncer("h", self.state, self.stamp, check_every=5, runner=self.runner, log=lambda m: None,
+                                wardrobe_of=lambda pet: None)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -59,7 +60,7 @@ class PetSyncerTest(unittest.TestCase):
         self.set_pet("bender")
         self.stamp.write_text("miss-minute\n")
         self.assertFalse(self.syncer.poll(0, "working"))
-        self.assertEqual(self.runner.calls[0][-4:], ["--pet", "bender", "--first", "working"])
+        self.assertEqual(self.runner.calls[0][-6:], ["--pet", "bender", "--outfit", "default", "--first", "working"])
         self.assertFalse(self.syncer.poll(1))  # still running
         self.runner.proc.code = 0
         self.assertTrue(self.syncer.poll(2))
@@ -96,6 +97,63 @@ class PetSyncerTest(unittest.TestCase):
         self.assertEqual(self.runner.calls, [])
 
 
+class OutfitTest(unittest.TestCase):
+    WARDROBE = {
+        "outfits": [{"id": "halloween", "spritesheetPath": "outfits/halloween.webp"},
+                    {"id": "christmas", "spritesheetPath": "outfits/christmas.webp"}],
+        "schedule": [{"outfit": "christmas", "when": {"dates": {"from": "12-15", "to": "01-02"}}},
+                     {"outfit": "halloween", "when": {"dates": {"from": "10-24", "to": "11-01"}}}],
+    }
+
+    def resolve(self, preference, when):
+        from datetime import datetime
+
+        return pet_sync.resolve_outfit(self.WARDROBE, preference, datetime(*when))
+
+    def test_manual_choice_wins(self):
+        self.assertEqual(self.resolve({"outfit": "christmas"}, (2026, 7, 1, 12)), "christmas")
+        self.assertEqual(self.resolve({"outfit": "default"}, (2026, 10, 30, 12)), "default")
+
+    def test_auto_follows_the_schedule_including_year_wrap(self):
+        self.assertEqual(self.resolve(None, (2026, 10, 30, 12)), "halloween")
+        self.assertEqual(self.resolve({"outfit": "auto"}, (2027, 1, 2, 12)), "christmas")
+        self.assertEqual(self.resolve({}, (2026, 10, 23, 12)), "default")
+
+    def test_unknown_choice_and_custom_schedule_rules(self):
+        self.assertEqual(self.resolve({"outfit": "pirate"}, (2026, 10, 30, 12)), "halloween")
+        custom = {"schedule": [{"outfit": "christmas", "when": {"days": ["fri"], "time": {"from": "17:00", "to": "09:00"}}},
+                               {"outfit": "halloween", "enabled": False, "when": {}}]}
+        self.assertEqual(self.resolve(custom, (2026, 10, 23, 18)), "christmas")  # Friday evening
+        self.assertEqual(self.resolve(custom, (2026, 10, 23, 12)), "default")    # Friday noon
+        self.assertEqual(self.resolve(custom, (2026, 10, 22, 18)), "default")    # Thursday
+
+    def test_no_wardrobe(self):
+        from datetime import datetime
+
+        self.assertEqual(pet_sync.resolve_outfit(None, {"outfit": "halloween"}, datetime(2026, 10, 30)), "default")
+
+    def test_look_stamp_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            stamp = Path(d) / ".pet"
+            stamp.write_text("flutter:halloween\n")
+            self.assertEqual(pet_sync.synced_look(stamp), ("flutter", "halloween"))
+            self.assertEqual(pet_sync.synced_pet(stamp), "flutter")
+            stamp.write_text("snoopy\n")  # stamps written before outfits existed
+            self.assertEqual(pet_sync.synced_look(stamp), ("snoopy", "default"))
+
+    def test_syncer_resyncs_when_only_the_outfit_changes(self):
+        with tempfile.TemporaryDirectory() as d:
+            state, stamp = Path(d) / "state.json", Path(d) / ".pet"
+            state.write_text(json.dumps({"preferences": {"defaultPetId": "flutter",
+                                                         "petWardrobePreferences": {"flutter": {"outfit": "halloween"}}}}))
+            stamp.write_text("flutter:default\n")
+            runner = FakeRunner()
+            syncer = PetSyncer("h", state, stamp, runner=runner, log=lambda m: None,
+                               wardrobe_of=lambda pet: self.WARDROBE)
+            syncer.poll(0, "idle")
+            self.assertEqual(runner.calls[0][-6:], ["--pet", "flutter", "--outfit", "halloween", "--first", "idle"])
+
+
 class SyncOrderTest(unittest.TestCase):
     def setUp(self):
         self.events = []
@@ -110,7 +168,7 @@ class SyncOrderTest(unittest.TestCase):
     def run_sync(self, first):
         pet_sync.sync(
             "h", "bender", first_state=first,
-            render=lambda pet, states: self.events.append(("render", tuple(states))),
+            render=lambda pet, outfit, states: self.events.append(("render", tuple(states))),
             upload=lambda host, f: self.events.append(("upload", f.name)),
             http_get=lambda host, path: self.events.append(("get", path)),
         )
@@ -125,7 +183,7 @@ class SyncOrderTest(unittest.TestCase):
         rest = [s for s in STATES if s != "working"]
         self.assertEqual(self.events[3], ("render", tuple(rest)))
         self.assertEqual([e[1] for e in self.events[4:]], [f"op-{s}.gif" for s in rest])
-        self.assertEqual(pet_sync.STAMP.read_text().strip(), "bender")
+        self.assertEqual(pet_sync.STAMP.read_text().strip(), "bender:default")
 
     def test_without_first_state_uploads_everything_in_order(self):
         self.run_sync(None)

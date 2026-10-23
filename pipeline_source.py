@@ -24,7 +24,7 @@ from pathlib import Path
 
 import config
 import setup_device
-from pet_sync import GIF_DIR, ROOT, active_pet, synced_pet, uv_binary
+from pet_sync import GIF_DIR, ROOT, look_args, uv_binary
 
 POLL_SECONDS = 120
 DISCOVER_EVERY = 24 * 3600
@@ -202,10 +202,9 @@ class PipelineNotifier:
             time.sleep(60 if sso_until else FAST_POLL_SECONDS if fast else POLL_SECONDS)
 
     def _show(self, filename: str, kind: str, title: str, body: str) -> None:
-        pet = synced_pet() or active_pet() or "miss-minute"
         with tempfile.TemporaryDirectory(prefix="smalltv-card-") as tmp:
             subprocess.run([uv_binary(), "run", "--quiet", "--with", "pillow", "python", str(ROOT / "make_gifs.py"),
-                            "--pet", pet, "--out", tmp, "--card", kind, "--card-title", title,
+                            *look_args(), "--out", tmp, "--card", kind, "--card-title", title,
                             "--message-text", body], check=True, cwd=ROOT, capture_output=True, timeout=120)
             shutil.copy2(Path(tmp) / "op-card.gif", GIF_DIR / filename)
         setup_device.upload_verified(self.host, GIF_DIR / filename)

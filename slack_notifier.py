@@ -18,7 +18,7 @@ from pathlib import Path
 
 import config
 import setup_device
-from pet_sync import GIF_DIR, ROOT, active_pet, synced_pet, uv_binary
+from pet_sync import GIF_DIR, ROOT, look_args, uv_binary
 from slack_source import POLL_SECONDS, SlackPoller, load_token, make_api
 
 MESSAGE_SECONDS = 20
@@ -92,7 +92,6 @@ class SlackNotifier:
             time.sleep(POLL_SECONDS)
 
     def _show(self, note: Notification) -> None:
-        pet = synced_pet() or active_pet() or "miss-minute"
         if note.kind == "calcifer":
             filename, seconds = "op-calcifer.gif", CALCIFER_SECONDS
             options = ["--calcifer", note.title, "--message-text", note.text]
@@ -101,7 +100,7 @@ class SlackNotifier:
             options = ["--message-from", note.title, "--message-text", note.text]
         with tempfile.TemporaryDirectory(prefix="smalltv-msg-") as tmp:
             subprocess.run([uv_binary(), "run", "--quiet", "--with", "pillow", "python", str(ROOT / "make_gifs.py"),
-                            "--pet", pet, "--out", tmp, *options], check=True, cwd=ROOT, capture_output=True,
+                            *look_args(), "--out", tmp, *options], check=True, cwd=ROOT, capture_output=True,
                            timeout=120)
             shutil.copy2(Path(tmp) / filename, GIF_DIR / filename)
         setup_device.upload_verified(self.host, GIF_DIR / filename)

@@ -213,9 +213,8 @@ def render_waiting_detail(host: str, lines: list[str]) -> bool:
     """Render op-waiting-detail.gif with the current pet and upload it. Runs in a thread."""
     try:
         with tempfile.TemporaryDirectory(prefix="smalltv-wait-") as tmp:
-            pet = pet_sync.synced_pet() or pet_sync.active_pet() or "miss-minute"
             subprocess.run([pet_sync.uv_binary(), "run", "--quiet", "--with", "pillow", "python",
-                            str(pet_sync.ROOT / "make_gifs.py"), "--pet", pet, "--out", tmp,
+                            str(pet_sync.ROOT / "make_gifs.py"), *pet_sync.look_args(), "--out", tmp,
                             "--waiting-detail", "|".join(lines)], check=True, capture_output=True, timeout=120)
             target = pet_sync.GIF_DIR / "op-waiting-detail.gif"
             shutil.copy2(Path(tmp) / target.name, target)

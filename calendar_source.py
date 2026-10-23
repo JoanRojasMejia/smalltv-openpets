@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 import setup_device
-from pet_sync import GIF_DIR, ROOT, active_pet, synced_pet, uv_binary
+from pet_sync import GIF_DIR, ROOT, look_args, uv_binary
 
 KEYCHAIN_SERVICE = "smalltv-openpets-calendar"
 LEAD = 300
@@ -159,10 +159,9 @@ class CalendarNotifier:
             time.sleep(5)
 
     def _show(self, title: str, body: str, seconds: float) -> None:
-        pet = synced_pet() or active_pet() or "miss-minute"
         with tempfile.TemporaryDirectory(prefix="smalltv-meet-") as tmp:
             subprocess.run([uv_binary(), "run", "--quiet", "--with", "pillow", "python", str(ROOT / "make_gifs.py"),
-                            "--pet", pet, "--out", tmp, "--meeting-title", title, "--message-text", body],
+                            *look_args(), "--out", tmp, "--meeting-title", title, "--message-text", body],
                            check=True, cwd=ROOT, capture_output=True, timeout=120)
             shutil.copy2(Path(tmp) / "op-meeting.gif", GIF_DIR / "op-meeting.gif")
         setup_device.upload_verified(self.host, GIF_DIR / "op-meeting.gif")
