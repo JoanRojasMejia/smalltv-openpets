@@ -1,0 +1,13 @@
+# Generated GIFs and previews (rendered from third-party pet artwork; regenerate with make_gifs.py)
+gifs/
+*-preview.png
+
+# Built helper binary (tools/build_calendar_helper.sh)
+tools/bin/
+
+# Personal settings
+calendars.txt
+
+__pycache__/
+*.pyc
+.DS_Store
