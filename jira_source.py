@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -142,16 +143,36 @@ def load_credentials() -> tuple[str, str] | None:
     return account.group(1), token.stdout.strip()
 
 
-def fetch_current_task(site: str, email: str, token: str, status: str, points_field: str) -> dict | None:
-    jql = f'assignee = currentUser() AND status = "{status}" ORDER BY updated DESC'
-    query = urllib.parse.urlencode({"jql": jql, "fields": f"summary,{points_field},statuscategorychangedate",
-                                    "maxResults": 5})
+def jira_search(site: str, email: str, token: str, jql: str, fields: str, limit: int = 50) -> list[dict]:
+    query = urllib.parse.urlencode({"jql": jql, "fields": fields, "maxResults": limit})
     auth = base64.b64encode(f"{email}:{token}".encode()).decode()
     req = urllib.request.Request(f"https://{site}/rest/api/3/search/jql?{query}",
                                  headers={"Authorization": f"Basic {auth}", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=20) as resp:
-        issues = json.load(resp).get("issues") or []
+        return json.load(resp).get("issues") or []
+
+
+def fetch_current_task(site: str, email: str, token: str, status: str, points_field: str) -> dict | None:
+    jql = f'assignee = currentUser() AND status = "{status}" ORDER BY updated DESC'
+    issues = jira_search(site, email, token, jql, f"summary,{points_field},statuscategorychangedate", limit=5)
     return parse_issue(issues[0], points_field) if issues else None
+
+
+def open_tickets(site: str, email: str, token: str, keys: list[str]) -> list[dict]:
+    """Which of these tickets are assigned to you and not Done: [{"key", "summary"}]."""
+    keys = [k for k in keys if re.fullmatch(r"[A-Z][A-Z0-9]{1,9}-\d+", k)]
+    if not keys:
+        return []
+    jql = f"key in ({','.join(keys)}) AND assignee = currentUser() AND statusCategory != Done"
+    try:
+        issues = jira_search(site, email, token, jql, "summary")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:
+            raise
+        if len(keys) == 1:
+            return []  # the key does not exist
+        return [t for k in keys for t in open_tickets(site, email, token, [k])]  # find the bad key(s)
+    return [{"key": i["key"], "summary": (i.get("fields") or {}).get("summary", "")} for i in issues]
 
 
 class SummaryNotifier:

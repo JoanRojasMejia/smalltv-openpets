@@ -24,5 +24,13 @@
     "start": "09:00",
     "end": "18:00",
     "lunch": "13:00-14:00"
-  }
+  },
+  "work_repos": [
+    "~/code/my-frontend-repo"
+  ],
+  "daily_exclude_projects": [
+    "personal"
+  ],
+  "daily_meeting_match": "daily",
+  "jira_blocked_status": "Blocked"
 }

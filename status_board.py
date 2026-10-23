@@ -59,6 +59,10 @@ def summary_rows(facts: dict[str, dict], now: float, tz=None) -> list[tuple[str,
     if agents and agents.get("sessions"):
         n, asks = agents["sessions"], agents.get("asks", 0)
         rows.append(("agents", f"{n} AGENT{'S' if n != 1 else ''} {asks} ASK{'S' if asks != 1 else ''}"))
+    pending = (facts.get("jira_pending") or {}).get("items") or []
+    if pending:
+        more = f" +{len(pending) - 1}" if len(pending) > 1 else ""
+        rows.append(("jira_done", f"{pending[0]['key']} DONE?{more}"))
     deploy = facts.get("last_deploy")
     if deploy:
         kind = "deploy_ok" if deploy["status"] == "Succeeded" else "deploy_failed"

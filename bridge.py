@@ -30,6 +30,7 @@ import session_store
 import setup_device
 from pet_sync import PetSyncer
 from calendar_source import CalendarNotifier
+from daily_notifier import DailyNotifier
 from jira_source import SummaryNotifier
 from pipeline_source import PipelineNotifier
 from slack_notifier import SlackNotifier
@@ -73,8 +74,12 @@ def recent_reaction(path, now_epoch: float, max_age: float) -> tuple[str, float]
     return None
 
 
+_LOG_LOCK = threading.Lock()
+
+
 def log(msg: str) -> None:
-    print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
+    with _LOG_LOCK:  # several worker threads log at once
+        print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
 class StateMachine:
@@ -307,13 +312,14 @@ class WaitingDetail:
 
 
 def run_sessions(host: str, state_dir: Path, dry_run: bool, poll: float, pet_sync: bool, slack: bool,
-                 calendar: bool, pipelines: bool, summary_card: bool) -> None:
+                 calendar: bool, pipelines: bool, summary_card: bool, daily: bool) -> None:
     display = make_display(host, dry_run)
     watcher = SessionWatcher(state_dir)
     syncer = PetSyncer(host, log=log) if pet_sync and not dry_run else None
     notifiers = [n for n in (SlackNotifier.start(host, log) if slack and not dry_run else None,
                              CalendarNotifier.start(host, log) if calendar and not dry_run else None,
-                             PipelineNotifier.start(host, log) if pipelines and not dry_run else None) if n]
+                             PipelineNotifier.start(host, log) if pipelines and not dry_run else None,
+                             DailyNotifier.start(host, log) if daily and not dry_run else None) if n]
     summary = SummaryNotifier.start(host, log) if summary_card and not dry_run else None
     overlay = MessageOverlay()
     agent_day = AgentDay()
@@ -337,12 +343,14 @@ def run_sessions(host: str, state_dir: Path, dry_run: bool, poll: float, pet_syn
         if now >= next_prune:
             session_store.prune(state_dir, now=wall)
             next_prune = now + 3600
-        for notifier in notifiers:
+        # One notification at a time: the next one waits until the current one's time is over.
+        for notifier in notifiers if not overlay.active(now) else []:
             notification = notifier.take()
             if notification:
                 path, seconds = notification
                 display.show_path(Path(path).stem, path, now)
                 overlay.start(now, seconds)
+                break
         changed = watcher.poll(wall)
         if changed:
             log(f"sessions -> {changed}")
@@ -405,6 +413,7 @@ def main() -> None:
     parser.add_argument("--no-calendar", action="store_true", help="do not show meeting reminders")
     parser.add_argument("--no-pipelines", action="store_true", help="do not show CodePipeline deploys / AWS SSO expiry")
     parser.add_argument("--no-summary", action="store_true", help="keep the plain idle GIF instead of the Jira summary")
+    parser.add_argument("--no-daily", action="store_true", help="do not generate or show the stand-up digest")
     parser.add_argument("--no-pet-sync", action="store_true",
                         help="do not re-render and upload the GIFs when the OpenPets pet changes")
     parser.add_argument("--poll", type=float, default=0.5, help="seconds between log reads")
@@ -415,7 +424,8 @@ def main() -> None:
         if args.source == "sessions":
             run_sessions(args.host, args.state_dir, args.dry_run, args.poll,
                          pet_sync=not args.no_pet_sync, slack=not args.no_slack, calendar=not args.no_calendar,
-                         pipelines=not args.no_pipelines, summary_card=not args.no_summary)
+                         pipelines=not args.no_pipelines, summary_card=not args.no_summary,
+                         daily=not args.no_daily)
         else:
             run(args.host, args.log, args.dry_run, args.poll)
     except KeyboardInterrupt:

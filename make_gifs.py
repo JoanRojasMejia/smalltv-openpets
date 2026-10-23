@@ -117,6 +117,8 @@ CARDS = {  # --card kind -> (accent, icon)
     "ok": ((80, 220, 100), px.ICONS["done"]),
     "failed": ((255, 70, 70), px.ICONS["error"]),
     "sso": ((255, 150, 40), LOCK_ICON),
+    "daily": ((255, 200, 90), ["######.", "#....#.", "#.##.#.", "#....#.", "#.##.#.", "#....#.", "######."]),
+    "jira": ((38, 132, 255), [".#####.", "...#...", "...#...", "...#...", "#..#...", "#..#...", ".##...."]),
 }
 MEETING_ICON = [".#...#.", "#######", "#.....#", "#.#.#.#", "#.....#", "#.#.#.#", "#######"]
 
@@ -291,6 +293,7 @@ ROW_STYLES = {  # summary row kind -> (color, icon)
     "deploy_ok": ((80, 220, 100), px.ICONS["done"]),
     "deploy_failed": ((255, 70, 70), px.ICONS["error"]),
     "slack": (MESSAGE_ACCENT, MESSAGE_ICON),
+    "jira_done": ((38, 132, 255), [".#####.", "...#...", "...#...", "...#...", "#..#...", "#..#...", ".##...."]),
     "agents": ((190, 120, 255), ["..#.#..", "#######", "#.#.#.#", "#######", "#.....#", "#.###.#", "#######"]),
 }
 
@@ -364,6 +367,43 @@ def build_summary_gif(sheet: Image.Image, title: str, percent: int | None, line:
         canvas.paste(big, (0, 0), big)
         images.append(canvas.quantize(colors=64, dither=Image.Dither.NONE))
     images[0].save(out, save_all=True, append_images=images[1:], duration=loop_ms // frames, loop=0, optimize=True)
+    return out.stat().st_size
+
+
+# --- full-screen page (daily digest) -----------------------------------------------------
+
+def build_page_gif(title: str, entries: list[str], out: Path, accent, icon) -> int:
+    """A full-screen card: icon + title, then one bullet per entry (no pet, maximum text)."""
+    frames = []
+    for frame in range(2):
+        layer = Image.new("RGBA", (LOW, LOW), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        x0, y0, x1, y1 = M, M + 1, LOW - M - 1, LOW - M - 1
+        pad = 5
+        halo = dim(accent, 0.6 if frame else 0.3)
+        px.stepped_box(d, (x0 - 1, y0 - 1, x1 + 1, y1 + 1), fill=halo, border=halo)
+        px.stepped_box(d, (x0, y0, x1, y1), fill=(14, 14, 24), border=accent)
+        for dy, row in enumerate(icon):
+            for dx, cell in enumerate(row):
+                if cell == "#":
+                    d.point((x0 + pad + dx, y0 + pad + dy), fill=accent)
+        px.draw_text(d, (x0 + pad + 11, y0 + pad), px.normalize_text(title), accent)
+        y, width = y0 + pad + px.GLYPH_H + 6, x1 - x0 - 2 * pad - 6
+        bottom = y1 - pad - px.GLYPH_H
+        for entry in entries or ["-"]:
+            lines = px.wrap(px.normalize_text(entry), width)
+            if y + (len(lines) - 1) * (px.GLYPH_H + px.LINE_GAP) > bottom:
+                break
+            d.rectangle((x0 + pad, y + 2, x0 + pad + 2, y + 4), fill=accent)  # bullet
+            for line in lines:
+                px.draw_text(d, (x0 + pad + 6, y), line, (235, 235, 240))
+                y += px.GLYPH_H + px.LINE_GAP
+            y += 3
+        canvas = Image.new("RGB", (SIZE, SIZE), (0, 0, 0))
+        big = layer.resize((SIZE, SIZE), Image.NEAREST)
+        canvas.paste(big, (0, 0), big)
+        frames.append(canvas.quantize(colors=32, dither=Image.Dither.NONE))
+    frames[0].save(out, save_all=True, append_images=frames[1:], duration=900, loop=0, optimize=True)
     return out.stat().st_size
 
 
@@ -452,9 +492,11 @@ def main() -> None:
     parser.add_argument("--summary-percent", default="", help="story-point budget used, empty if unknown")
     parser.add_argument("--summary-line", default="", help="e.g. '10 H LEFT'")
     parser.add_argument("--summary-rows", default="[]", help='JSON [[kind, text], ...] (meeting, deploy_ok, ...)')
-    parser.add_argument("--card", default=None, choices=["running", "ok", "failed", "sso"],
+    parser.add_argument("--card", default=None, choices=["running", "ok", "failed", "sso", "jira", "daily"],
                         help="render only a generic notification card (op-card.gif) with --card-title and --message-text")
     parser.add_argument("--card-title", default="")
+    parser.add_argument("--page", action="store_true", help="with --card: full-screen page, no pet (uses --card-lines)")
+    parser.add_argument("--card-lines", default="", help="'|'-separated entries, one bullet each (instead of --message-text)")
     parser.add_argument("--meeting-title", default=None,
                         help="render only a meeting reminder GIF (op-meeting.gif); text from --message-text")
     parser.add_argument("--waiting-detail", default=None,
@@ -496,9 +538,21 @@ def main() -> None:
                                  json.loads(args.summary_rows), out_dir / "op-summary.gif")
         print(f"op-summary.gif  {size // 1024} KB")
         return
+    if args.card is not None and args.page:
+        accent, icon = CARDS[args.card]
+        size = build_page_gif(args.card_title or args.card, [e for e in args.card_lines.split("|") if e.strip()],
+                              out_dir / "op-card.gif", accent, icon)
+        print(f"op-card.gif  {size // 1024} KB")
+        return
     if args.card is not None:
         accent, icon = CARDS[args.card]
-        body = px.wrap(px.normalize_text(args.message_text) or "...", message_width(), max_lines=MESSAGE_LINES - 1)
+        if args.card_lines:
+            body = []
+            for entry in [e for e in args.card_lines.split("|") if e.strip()]:
+                body += px.wrap(px.normalize_text("- " + entry), message_width())
+            body = body[:MESSAGE_LINES - 1] or ["..."]
+        else:
+            body = px.wrap(px.normalize_text(args.message_text) or "...", message_width(), max_lines=MESSAGE_LINES - 1)
         size = build_message_gif(sheet, px.normalize_text(args.card_title or args.card), body,
                                  out_dir / "op-card.gif", accent=accent, icon=icon)
         print(f"op-card.gif  {size // 1024} KB")

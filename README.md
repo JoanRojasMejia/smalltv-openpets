@@ -80,6 +80,23 @@ Setup: `jira_site` (and optionally `jira_points_field`, `jira_status`, `work_sch
 security add-generic-password -U -s smalltv-openpets-jira -a "you@company.com" -w   # paste the token when prompted
 ```
 
+### Stand-up digest
+
+`daily_digest.py` gathers what you did on a workday — your commits in `work_repos` (local clones, all branches, matched by `my_emails`), Jira tickets whose status changed, your task in progress and blocked tickets (`jira_blocked_status`), your deploys, the agents' Engram memories (excluding `daily_exclude_projects`) and their daily notes — and asks Claude Haiku (headless `claude -p`, no tools, hooks disabled, no saved session) for three short lists: **AYER**, **HOY** and **BLOQUEOS**. Without the model it falls back to the raw facts. Digests are saved per day in `~/.local/state/smalltv-openpets/daily/`.
+
+The bridge generates each workday's digest at 17:50 (or the next morning if the Mac was off) and shows the previous workday's digest as three full-screen pages: when the workday starts (09:00) and 10 and 3 minutes before any meeting whose title contains `daily_meeting_match` (default "daily"). Disable with `--no-daily`.
+
+Agents can add notes for the digest:
+
+```bash
+python3 daily_digest.py note "ABC-41: form validation done"
+python3 daily_digest.py generate --date 2026-10-22   # build and print a digest by hand
+```
+
+### Production deploys → Jira
+
+When a production pipeline (name contains PROD, not TEST) deploys a commit with bracketed ticket keys (`[ABC-41] ...`), the tickets assigned to you that are not Done yet trigger a blue **IN PROD: MOVE TO DONE?** card, and stay as a summary row (`ABC-41 DONE?`) until Jira shows them done (rechecked every 30 min).
+
 ### Deploys (AWS CodePipeline) and AWS SSO
 
 With `pipeline_repos` and `my_emails` in the config, the bridge watches the CodePipeline pipelines whose CodeCommit source is one of those repos (discovered once a day; scanning every pipeline takes a few minutes) and polls their latest executions every 2 min. An execution is yours when its source commit was authored by one of `my_emails` or one of them appears in the commit message (squash merges list every author). When one of yours starts, a cyan **DEPLOYING...** card shows for 20 s and polling speeds up to every 45 s; when it ends, a green **DEPLOYED** card (`ENV: TICKET subject`) shows for 30 s, or a red **DEPLOY FAILED** card for 45 s. Repointing a CI environment to another branch needs nothing: pipelines are matched by repository, and authors are checked per execution. The first poll is a baseline, so old deploys are never shown.
@@ -116,7 +133,7 @@ python3 install_hooks.py --apply                     # Claude Code + OpenCode ho
 uv run --with pillow python make_gifs.py --pet miss-minute
 python3 setup_device.py --host <screen-ip> --replace --apply
 python3 bridge.py --dry-run                          # watch without touching the screen
-python3 -m unittest test_bridge test_sessions test_pet_sync test_slack test_calendar test_pipelines
+python3 -m unittest test_bridge test_sessions test_pet_sync test_slack test_calendar test_pipelines test_jira test_status_board test_agent_stats test_release_followup test_daily
 uv run --with icalendar --with recurring-ical-events python -m unittest tools/test_calendar_events.py
 node --test hooks/smalltv-openpets.test.mjs
 ```

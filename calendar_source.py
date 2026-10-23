@@ -148,6 +148,7 @@ class CalendarNotifier:
                     error = None
                 upcoming = [e for e in sorted(self.reminder.events, key=lambda e: e["start"]) if e["start"] > now]
                 BOARD.set("next_meeting", upcoming[0] if upcoming else None)
+                BOARD.set("meetings", {"items": upcoming})
                 hit = self.reminder.poll(now)
                 if hit:
                     event, minutes = hit
