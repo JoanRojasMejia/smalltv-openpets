@@ -112,7 +112,7 @@ The bridge checks the OpenPets default pet (`preferences.defaultPetId` in `~/Lib
 ## Files
 
 - `hooks/claude_hook.py` — Claude Code hook (prints nothing, always exits 0, ~30 ms).
-- `hooks/smalltv-openpets.js` — OpenCode plugin.
+- `hooks/smalltv-openpets.js` — OpenCode plugin for both V1 (1.18.29+, `server()`) and V2 (`setup()`).
 - `session_store.py` — session file format, priority and expiry rules.
 - `bridge.py` — the long-running bridge (`--dry-run` prints requests instead of sending them).
 - `install_hooks.py` — installs/uninstalls both hooks. Dry run unless `--apply`; backs up `~/.claude/settings.json` first.
@@ -140,7 +140,7 @@ uv run --with icalendar --with recurring-ical-events python -m unittest tools/te
 node --test hooks/smalltv-openpets.test.mjs
 ```
 
-OpenCode loads the plugin when it starts; restart running OpenCode sessions after installing.
+OpenCode loads the plugin when it starts; restart running OpenCode sessions after installing. OpenCode V1 and V2 both load `~/.config/opencode/plugins/smalltv-openpets.js`: V1 calls its `server()` entry and V2 calls `setup()`.
 
 ## Service
 
